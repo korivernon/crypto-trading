@@ -1,21 +1,13 @@
 # internally defined consts and functions
+import config
 from constants import *
-from sell import * 
-from buy import *
+from sell import *
 
 pp = pprint.PrettyPrinter(indent=4)
 
 # markets = exchange.load_markets()
 
 securities = ["ETH/USD"]
-
-#ohlcv
-# print("ohlcv")
-# ohlcv = exchange.fetchOHLCV("ETH/USD", timeframe="15m",limit=5)
-# print(ohlcv)
-# for candle in ohlcv:
-#     print (candle)
-
 def analyze_orderbook(securities_dict, exchange = ccxt.coinbasepro(), range = 10):
     for security in securities_dict.keys():
         order_book = exchange.fetch_order_book(security)
@@ -42,21 +34,20 @@ def double_down(security, percentage, account,against=USD):
     pass
 
 def main():
-    exchange_id = 'coinbasepro'
+    exchange_id = 'gemini'
     exchange_class = getattr(ccxt, exchange_id)
-    coinbase = exchange_class({
-        'apiKey': config.coinbase_public_api_key,
-        'secret': config.coinbase_secret_private_key,
-        'password': config.coinbase_passphrase
+    exch = exchange_class({
+        'apiKey': config.apiKey,
+        'secret': config.apiSecret
     }) 
 
     # securities_dict = fetch_price(securities)
     # print(securities_dict)
     # print(analyze_orderbook(securities_dict, range = 0.10))
 
-    stop_loss("ETH", 3, coinbase,"BTC")
-    realize_profits("ETH", 6, coinbase)
-    execute_market_sell_order("BTC",coinbase)
+    stop_loss("ETH", 3, exch,"BTC")
+    realize_profits("ETH", 6, exch)
+    execute_market_sell_order("BTC",exch)
 
     # print(coinbase.fetch_balance()["USD"])
 

@@ -1,4 +1,5 @@
 from constants import *
+import ccxt
 
 def stop_loss(security, percentage, account,against=USD):
     print(f"\nstop_loss(security={security}, percentage={percentage}, account={account})")
