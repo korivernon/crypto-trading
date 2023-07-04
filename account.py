@@ -8,6 +8,9 @@ gmail.password = config.password
 import time
 from datetime import datetime, timedelta
 
+STOP_LOSS = .03
+TAKE_PROFIT = .05
+
 class Account:
     def __init__(self, exch = ccxt.gemini({'apiKey':config.apiKey, 'secret':config.apiSecret})):
         self.exch = exch
@@ -67,15 +70,17 @@ class Account:
 
     def _should_sell(self, symbol='ETH'):
         if symbol in self.active_trades.keys():
-            if self.active_trades[symbol]['total_gain_fees'] < -.03:
+
+            if self.active_trades[symbol]['total_gain_fees'] < STOP_LOSS * -1:
                 print("Should sell, total loss + fees is below above 3%")
                 return True
-            elif self.active_trades[symbol]['total_gain_fees'] > .05:
+            elif self.active_trades[symbol]['total_gain_fees'] > TAKE_PROFIT:
                 print("Should sell, total gain + fees is below above 5%")
                 return True
             else:
                 print("Hold, parameters not met.")
                 return False
+        print("Should not sell")
         return False
     def getBalanceUSD(self):
         exchange = self.exch
@@ -193,9 +198,9 @@ class Account:
             return {'status': f'Invalid Limit Order Quantity: {e}'}
         return order
 
-    def tvs_enter_trade(self):
+    def tvs_enter_trade(self, check_signals):
         # first look for opportunities in tradingview scraper
-        tvscraper = check_signals().query("decision == 'BUY'")
+        tvscraper = check_signals.query("decision == 'BUY'")
 
         purchased = []
         if tvscraper.empty:
@@ -232,9 +237,9 @@ class Account:
                 else:
                     print("Market buy order failed")
         return purchased
-    def tvs_exit_trade(self):
+    def tvs_exit_trade(self, check_signals):
         # first look for opportunities in tradingview scraper
-        tvscraper = check_signals().query("decision == 'SELL'")
+        tvscraper = check_signals.query("decision == 'SELL'")
         sold = []
         if tvscraper.empty:
             print("No trades to exit.")
@@ -251,7 +256,7 @@ class Account:
             symbol = f'{row["buy"]}/{row["with"]}'
             print('symbol', symbol, 'free balance', free_balance)
 
-            if free_balance != 0 and not self._should_sell(symbol): # if it's not a recent trade then execute trade
+            if free_balance != 0 and self._should_sell(symbol): # if we should sell then go forward
                 amount_free_to_use = free_balance
                 # convert from the amount we want to use to the specified amount
                 amt =  amount_free_to_use / self.exch.fetchTicker(symbol)['last']
@@ -281,8 +286,9 @@ def runTvsBot():
         print('active trades:', acct.active_trades)
         print('rsi indicator:', acct.rsi_indicator())
         print('rsi value:', acct.rsi_value())
-        print('entered into trades trade where:', acct.tvs_enter_trade())
-        print('exited trades where:', acct.tvs_exit_trade())
+        indicators_df = check_signals()
+        print('entered into trades trade where:', acct.tvs_enter_trade(indicators_df))
+        print('exited trades where:', acct.tvs_exit_trade(indicators_df))
         print("sleeping for 5 minutes")
         time.sleep(300)
 def main():
