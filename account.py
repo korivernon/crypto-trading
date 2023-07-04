@@ -48,7 +48,7 @@ class Account:
                     balance += float(value)
         return balance
 
-    def check_recent_trade(self, symbol='ETH/USD'):
+    def _recent_trade(self, symbol='ETH/USD'):
         trades = self.exch.fetch_my_trades(symbol)
 
         latest_timestamp = float('-inf')
@@ -56,12 +56,27 @@ class Account:
             if latest_timestamp < trade['timestamp']:
                 latest_timestamp = trade['timestamp']
                 print(trade)
-        latest_timestamp = str(latest_timestamp)[:10]
-        latest = datetime.utcfromtimestamp(int(latest_timestamp))
+        latest = datetime.utcfromtimestamp(latest_timestamp/1000)
         dnow = datetime.now()
         print('latest', latest, type(latest))
         print('datetime now', dnow, type(dnow))
-        return timedelta(latest, dnow).min
+        timediff = dnow - latest
+        if timediff.total_seconds()/60 > 60 * 12: # 12 hours
+            return False
+        return True
+
+    def _should_sell(self, symbol='ETH'):
+        if symbol in self.active_trades.keys():
+            if self.active_trades[symbol]['total_gain_fees'] < -.03:
+                print("Should sell, total loss + fees is below above 3%")
+                return True
+            elif self.active_trades[symbol]['total_gain_fees'] > .05:
+                print("Should sell, total gain + fees is below above 5%")
+                return True
+            else:
+                print("Hold, parameters not met.")
+                return False
+        return False
     def getBalanceUSD(self):
         exchange = self.exch
         balances = exchange.fetch_balance()['free']
@@ -162,10 +177,30 @@ class Account:
             return {'status': f'Invalid Limit Order Quantity: {e}'}
         return order
 
-    def tvs_enter_trade(self, env='dev'):
-        # first look for opportunities in tradingview scraper
+    def place_sell_market_order(self, symbol, amt):
+        last_price = self.exch.fetchTicker(symbol)['last']
+        try:
+            order = self.exch.create_limit_order(symbol=symbol, side='sell', amount=amt, price=last_price)
+        except Exception as e:
+            print(f"\t{e}\n\t\tInvalid Limit Order Quantity.")
+            gmail.send(
+                subject=f"CMon: Sell Order FAILED {symbol}. Amount: {amt}",
+                sender=f"{config.email}",
+                receivers=[f"{config.email}"],
+                # A plot in body
+                html=f"""Market Sell order FAILED for {symbol}. Amount: {amt}."""
+            )
+            return {'status': f'Invalid Limit Order Quantity: {e}'}
+        return order
 
+    def tvs_enter_trade(self):
+        # first look for opportunities in tradingview scraper
         tvscraper = check_signals().query("decision == 'BUY'")
+
+        purchased = []
+        if tvscraper.empty:
+            print("No trades to enter.")
+            return None
         for index,row in tvscraper.iterrows():
             if row['with'] == 'USDT' or row['with'] == 'USD':
                 free_balance = self.getBalanceUSD()
@@ -173,7 +208,7 @@ class Account:
                 free_balance = self.active_trades[row['with']]['amount']
             symbol = f'{row["buy"]}/{row["with"]}'
             print('symbol', symbol, 'free balance', free_balance)
-            if free_balance != 0:
+            if free_balance != 0 and not self._recent_trade(symbol): # if it's not a recent trade then execute trade
                 weight = row['total weight']
                 # we want to get the total ((100/4) / 5 ) * weight
                 amount_free_to_use = (((1/4)/5) * weight) * free_balance
@@ -192,19 +227,66 @@ class Account:
                             Market buy order filled for {symbol}. Amount: {amt}.
                             """
                     )
-
+                    purchased.append(symbol)
                     print("Market buy order filled")
                 else:
                     print("Market buy order failed")
-def main():
+        return purchased
+    def tvs_exit_trade(self):
+        # first look for opportunities in tradingview scraper
+        tvscraper = check_signals().query("decision == 'SELL'")
+        sold = []
+        if tvscraper.empty:
+            print("No trades to exit.")
+            return None
+        for index,row in tvscraper.iterrows():
+            print("symbol", row['buy'], "in  active trades", self.active_trades.keys())
+            if row['buy'] == 'USDT' or row['buy'] == 'USD':
+                free_balance = self.getBalanceUSD()
+            elif row['buy'] in self.active_trades.keys():
+                free_balance = self.active_trades[row['buy']]['amount']
+            else:
+                print(f"Don't have security {row['buy']}. Cannot sell.")
+                continue
+            symbol = f'{row["buy"]}/{row["with"]}'
+            print('symbol', symbol, 'free balance', free_balance)
+
+            if free_balance != 0 and not self._should_sell(symbol): # if it's not a recent trade then execute trade
+                amount_free_to_use = free_balance
+                # convert from the amount we want to use to the specified amount
+                amt =  amount_free_to_use / self.exch.fetchTicker(symbol)['last']
+                print('sell', symbol, 'with', amt)
+                order = self.place_sell_market_order(symbol, amt)
+                if order['status'] == 'filled':
+                    gmail.send(
+                        subject=f"CMon: Sell Order Filled {symbol}. Amount: {amt}",
+                        sender=f"{config.email}",
+                        receivers=[f"{config.email}"],
+                        # A plot in body
+                        html=f"""
+                            Market Sell order filled for {symbol}. Amount: {amt}.
+                            """
+                    )
+                    sold.append(symbol)
+                    print("Market Sell order filled")
+                else:
+                    print("Market Sell order failed")
+        return sold
+
+def runTvsBot():
     acct = Account()
-    print('account value:',acct.balance)
-    print('get balance usd:', acct.getBalanceUSD())
-    print('active trades:', acct.active_trades)
-    print('rsi indicator:',acct.rsi_indicator())
-    print('rsi value:',acct.rsi_value())
-    # print('enter trade where:\n',acct.tvs_enter_trade())
-    print('timestamp:', acct.check_recent_trade(), type(acct.check_recent_trade()))
+    while True:
+        print('account value:', acct.balance)
+        print('get balance usd:', acct.getBalanceUSD())
+        print('active trades:', acct.active_trades)
+        print('rsi indicator:', acct.rsi_indicator())
+        print('rsi value:', acct.rsi_value())
+        print('entered into trades trade where:', acct.tvs_enter_trade())
+        print('exited trades where:', acct.tvs_exit_trade())
+        print("sleeping for 5 minutes")
+        time.sleep(300)
+def main():
+    runTvsBot()
 
 if __name__ == '__main__':
     main()
