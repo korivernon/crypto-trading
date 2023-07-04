@@ -1,13 +1,21 @@
 import config
 import ccxt
 from rsi_indicator import rsi
+from tradingviewscraper import check_signals
+from redmail import gmail
+gmail.username = config.email
+gmail.password = config.password
+import time
+from datetime import datetime, timedelta
+
 class Account:
     def __init__(self, exch = ccxt.gemini({'apiKey':config.apiKey, 'secret':config.apiSecret})):
         self.exch = exch
-        self.balance = self.getBalanceUSD()
+        self.balance = self.getBalanceInUSD()
         self.active_trades = self.getActiveTrades()
+        self.recently_purchased = {}
 
-    def getBalanceUSD(self):
+    def getBalanceInUSD(self):
         exchange = self.exch
         balances = exchange.fetch_balance()['free']
         balance = 0
@@ -38,6 +46,29 @@ class Account:
                         balance += price * float(value)
                 else:
                     balance += float(value)
+        return balance
+
+    def check_recent_trade(self, symbol='ETH/USD'):
+        trades = self.exch.fetch_my_trades(symbol)
+
+        latest_timestamp = float('-inf')
+        for trade in trades:
+            if latest_timestamp < trade['timestamp']:
+                latest_timestamp = trade['timestamp']
+                print(trade)
+        latest_timestamp = str(latest_timestamp)[:10]
+        latest = datetime.utcfromtimestamp(int(latest_timestamp))
+        dnow = datetime.now()
+        print('latest', latest, type(latest))
+        print('datetime now', dnow, type(dnow))
+        return timedelta(latest, dnow).min
+    def getBalanceUSD(self):
+        exchange = self.exch
+        balances = exchange.fetch_balance()['free']
+        balance = 0
+        for token, value in balances.items():
+            if float(value) != 0:
+                balance += float(value)
         return balance
     def average_purchase_price(self, symbol='ETH/USD'):
         exchange = self.exch
@@ -114,12 +145,66 @@ class Account:
         elif rsi_value <70:
             indicator = abs(1-( abs(rsi_value-70) / 20)) * -1
         return indicator
+
+    def place_buy_market_order(self, symbol, amt):
+        last_price = self.exch.fetchTicker(symbol)['last']
+        try:
+            order = self.exch.create_limit_order(symbol=symbol, side='buy', amount=amt, price=last_price)
+        except Exception as e:
+            print(f"\t{e}\n\t\tInvalid Limit Order Quantity.")
+            gmail.send(
+                subject=f"CMon: Buy Order FAILED {symbol}. Amount: {amt}",
+                sender=f"{config.email}",
+                receivers=[f"{config.email}"],
+                # A plot in body
+                html=f"""Market buy order FAILED for {symbol}. Amount: {amt}."""
+            )
+            return {'status': f'Invalid Limit Order Quantity: {e}'}
+        return order
+
+    def tvs_enter_trade(self, env='dev'):
+        # first look for opportunities in tradingview scraper
+
+        tvscraper = check_signals().query("decision == 'BUY'")
+        for index,row in tvscraper.iterrows():
+            if row['with'] == 'USDT' or row['with'] == 'USD':
+                free_balance = self.getBalanceUSD()
+            elif row['with'] in self.active_trades.keys():
+                free_balance = self.active_trades[row['with']]['amount']
+            symbol = f'{row["buy"]}/{row["with"]}'
+            print('symbol', symbol, 'free balance', free_balance)
+            if free_balance != 0:
+                weight = row['total weight']
+                # we want to get the total ((100/4) / 5 ) * weight
+                amount_free_to_use = (((1/4)/5) * weight) * free_balance
+                print(amount_free_to_use)
+                # convert from the amount we want to use to the specified amount
+                amt =  amount_free_to_use/ self.exch.fetchTicker(symbol)['last']
+                print('buy', symbol, 'with', amt)
+                order = self.place_buy_market_order(symbol, amt)
+                if order['status'] == 'filled':
+                    gmail.send(
+                        subject=f"CMon: Buy Order Filled {symbol}. Amount: {amt}",
+                        sender=f"{config.email}",
+                        receivers=[f"{config.email}"],
+                        # A plot in body
+                        html=f"""
+                            Market buy order filled for {symbol}. Amount: {amt}.
+                            """
+                    )
+
+                    print("Market buy order filled")
+                else:
+                    print("Market buy order failed")
 def main():
     acct = Account()
-    print(acct.balance)
-    print(acct.active_trades)
-    print(acct.rsi_indicator())
-    print(acct.rsi_value())
+    print('account value:',acct.balance)
+    print('get balance usd:', acct.getBalanceUSD())
+    print('active trades:', acct.active_trades)
+    print('rsi indicator:',acct.rsi_indicator())
+    print('rsi value:',acct.rsi_value())
+    # print('enter trade where:\n',acct.tvs_enter_trade())
+    print('timestamp:', acct.check_recent_trade(), type(acct.check_recent_trade()))
 
 if __name__ == '__main__':
     main()

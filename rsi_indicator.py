@@ -6,10 +6,8 @@ import config
 def rsi(exchange= ccxt.gemini({'apiKey': config.apiKey, 'secret': config.apiSecret}), symbol='ETH/USD'):
     symbol = 'ETH/USD'
     timeframe = '1m'
-    limit = 50
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe)
-        print('--------------------------------------------------------------')
         if len(ohlcv):
             df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
             df['time'] = pd.to_datetime(df['time'], unit='ms')
